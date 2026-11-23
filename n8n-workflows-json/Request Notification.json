@@ -1,0 +1,122 @@
+{
+  "name": "Request Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-loan-event",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        -288,
+        -144
+      ],
+      "id": "de4a859a-382e-4479-95c5-158354ce8784",
+      "name": "Webhook",
+      "webhookId": "4844375e-01c2-4cab-b2fb-0cde056cebcc"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nreturn await Promise.all(\n  $input.all().map(async (item) => {\n    const headers = item.json.headers ?? {};\n    const timestamp = String(\n      headers['x-lendloop-timestamp'] ?? headers['X-LendLoop-Timestamp'] ?? ''\n    ).trim();\n\n    const rawSigHeader = String(\n      headers['x-lendloop-signature'] ?? headers['X-LendLoop-Signature'] ?? ''\n    ).trim();\n    const signature = rawSigHeader.startsWith('sha256=')\n      ? rawSigHeader.slice('sha256='.length)\n      : rawSigHeader;\n\n    const secret = String(item.json.webhookSecret ?? '').trim();\n\n    if (!timestamp) {\n      throw new Error('Missing X-LendLoop-Timestamp header');\n    }\n    if (!signature) {\n      throw new Error('Missing X-LendLoop-Signature header');\n    }\n    if (!secret) {\n      throw new Error(\n        'Missing webhookSecret (check $env.LENDLOOP_N8N_WEBHOOK_SECRET and N8N_BLOCK_ENV_ACCESS_IN_NODE=false)'\n      );\n    }\n\n    const nowSec = Math.floor(Date.now() / 1000);\n    if (Math.abs(nowSec - Number(timestamp)) > 300) {\n      throw new Error('Webhook timestamp outside allowed window');\n    }\n\n    let rawBody;\n    if (typeof item.json.rawBody === 'string') {\n      rawBody = item.json.rawBody;\n    } else if (item.binary?.data) {\n      rawBody = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n    } else {\n      rawBody = JSON.stringify(item.json.body ?? {});\n    }\n\n    const expected = crypto\n      .createHmac('sha256', secret)\n      .update(`${timestamp}.${rawBody}`)\n      .digest('hex');\n\n    const sigBuf = Buffer.from(signature, 'utf8');\n    const expBuf = Buffer.from(expected, 'utf8');\n\n    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {\n      throw new Error('Invalid HMAC signature');\n    }\n\n    const payload =\n      typeof item.json.body === 'object' && item.json.body !== null\n        ? item.json.body\n        : JSON.parse(rawBody);\n\n    return { json: payload };\n  })\n);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        -144
+      ],
+      "id": "d82835d8-3e00-4978-8d28-9d2fcc1faeef",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item) => {\n  const data = item.json;\n  const recipient = data.recipient ?? {};\n\n  const messages = {\n    request_created: `New borrow request for \"${data.toolName}\" (${data.startDate} to ${data.endDate}). Status: ${data.status}.`,\n    request_approved: `Your borrow request for \"${data.toolName}\" (${data.startDate} to ${data.endDate}) was approved.`,\n    request_declined: `Your borrow request for \"${data.toolName}\" (${data.startDate} to ${data.endDate}) was declined.`,\n    loan_returned: `Return recorded for \"${data.toolName}\" (${data.startDate} to ${data.endDate}). Status: ${data.status}.`,\n  };\n\n  const body =\n    messages[data.eventType] ??\n    `Loan update (${data.eventType}) for \"${data.toolName}\" (${data.startDate} to ${data.endDate}). Status: ${data.status}.`;\n\n  return {\n    json: {\n      idempotencyKey: data.idempotencyKey,\n      eventType: data.eventType,\n      recipientName: recipient.name ?? \"Neighbor\",\n      recipientEmail: recipient.email ?? null,\n      subject: `LendLoop: ${data.toolName} (${data.status})`,\n      message: body,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        -144
+      ],
+      "id": "4c695a39-f563-4950-bbc6-5d868b45a800",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "66414a65-199c-4c54-908f-64ad8f29ce9d",
+              "name": "webhookSecret",
+              "value": "={{ $env.LENDLOOP_N8N_WEBHOOK_SECRET }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -64,
+        -144
+      ],
+      "id": "435d7974-cdaa-4c27-b6c1-0f9a4ae2e5ff",
+      "name": "Edit Fields"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "67cb58d7-e066-47ca-ba85-d6081eb64499",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e47550c80db7dc538f8f03b90b0ac433662b224e49f2519e87d3cd150d030b16"
+  },
+  "nodeGroups": [],
+  "id": "SnBQTe7vOYA46x8E",
+  "tags": []
+}

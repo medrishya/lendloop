@@ -1,0 +1,234 @@
+{
+  "name": "Overdue Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "013038ca-cc26-4ce1-be4f-24dfda852e41",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1b2c3d4-2222-4aaa-8bbb-000000000002",
+              "name": "apiSecret",
+              "value": "={{ $env.LENDLOOP_CONVEX_API_SECRET }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-3333-4aaa-8bbb-000000000003",
+              "name": "convexSiteUrl",
+              "value": "={{ $env.LENDLOOP_CONVEX_SITE_URL }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-4444-4aaa-8bbb-000000000004",
+              "name": "todayDate",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "id": "baa14533-fb65-43d0-afbf-3bfc4f8f5d2a",
+      "name": "Prepare Config & Date"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nreturn $input.all().map((item) => {\n  const { apiSecret, convexSiteUrl, todayDate } = item.json;\n  if (!apiSecret || !convexSiteUrl) {\n    throw new Error(\n      'Missing LENDLOOP_CONVEX_API_SECRET or LENDLOOP_CONVEX_SITE_URL'\n    );\n  }\n\n  const timestamp = Math.floor(Date.now() / 1000).toString();\n  const signature = crypto\n    .createHmac('sha256', apiSecret)\n    .update(`${timestamp}.`)\n    .digest('hex');\n\n  return {\n    json: {\n      apiSecret,\n      convexSiteUrl: convexSiteUrl.replace(/\\/$/, ''),\n      todayDate,\n      timestamp,\n      signature,\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "a0b39554-41e3-4419-9010-87a4c0a92dd0",
+      "name": "Sign GET Overdue Loans"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.convexSiteUrl }}/api/n8n/overdue-loans",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "date",
+              "value": "={{ $json.todayDate }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        656,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "14a02d93-5f4d-45e5-9bbe-9baae1dcb25f",
+      "name": "Fetch Overdue Loans"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst config = $('Sign GET Overdue Loans').first().json;\nconst { apiSecret, convexSiteUrl, todayDate } = config;\n\nconst output = [];\n\nfor (const item of $input.all()) {\n  const loans = Array.isArray(item.json.loans) ? item.json.loans : [];\n\n  for (const loan of loans) {\n    const idempotencyKey = `overdue:${loan.loanId}:${todayDate}`;\n    const reminderMessage = `Reminder: \"${loan.toolName}\" was due on ${loan.dueDate}. Please return it or coordinate with your lender on LendLoop.`;\n\n    const writeBackBody = JSON.stringify({\n      idempotencyKey,\n      loanId: loan.loanId,\n      eventType: 'overdue_reminder',\n      channel: 'n8n-reminder',\n      summary: `Overdue reminder sent for ${loan.toolName} (due ${loan.dueDate})`,\n    });\n\n    const timestamp = Math.floor(Date.now() / 1000).toString();\n    const signature = crypto\n      .createHmac('sha256', apiSecret)\n      .update(`${timestamp}.${writeBackBody}`)\n      .digest('hex');\n\n    output.push({\n      json: {\n        convexSiteUrl,\n        borrowerName: loan.borrowerName,\n        borrowerEmail: loan.borrowerEmail,\n        toolName: loan.toolName,\n        dueDate: loan.dueDate,\n        reminderMessage,\n        writeBackBody,\n        timestamp,\n        signature,\n      },\n    });\n  }\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -16
+      ],
+      "id": "0b63923c-138d-43d5-aa83-ea48f4fe97d7",
+      "name": "Build Reminder & Sign Write-Back"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.convexSiteUrl }}/api/n8n/automation-events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.writeBackBody }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1104,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "17300751-ea6c-44f1-8cb5-55fd758d6c4f",
+      "name": "Write Back Reminder Idempotently"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Config & Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Config & Date": {
+      "main": [
+        [
+          {
+            "node": "Sign GET Overdue Loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign GET Overdue Loans": {
+      "main": [
+        [
+          {
+            "node": "Fetch Overdue Loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Overdue Loans": {
+      "main": [
+        [
+          {
+            "node": "Build Reminder & Sign Write-Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Reminder & Sign Write-Back": {
+      "main": [
+        [
+          {
+            "node": "Write Back Reminder Idempotently",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "3ae30a00-f025-4e83-8388-afe70647b98d",
+  "meta": {
+    "instanceId": "e47550c80db7dc538f8f03b90b0ac433662b224e49f2519e87d3cd150d030b16"
+  },
+  "nodeGroups": [],
+  "id": "qThZnMIGQLHx8wkd",
+  "tags": []
+}
