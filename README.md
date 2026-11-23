@@ -1,13 +1,15 @@
-# System Overview
+## System Architecture
 
+```text
 [Browser / Next.js App Router]
-│ ▲
-│ (Clerk Auth) │ (Real-time Queries / Mutations)
-▼ ▼
-[Clerk] [Convex Cloud]
-├── Queries & Mutations (loans, tools, users, automationEvents)
-├── Internal Actions ('use node') ──► HMAC-SHA256 Webhook ──► [n8n] (via HTTPS Tunnel)
-└── HTTP Routes (/api/n8n/\*) ◄── HMAC-SHA256 Auth ◄── [n8n] (Scheduled Overdue Reminders)
+       │                 ▲
+       │ (Clerk Auth)    │ (Real-time Queries / Mutations)
+       ▼                 ▼
+   [Clerk]        [Convex Cloud]
+                  ├── Queries & Mutations (loans, tools, users, automationEvents)
+                  ├── Internal Actions ('use node') ──► HMAC-SHA256 Webhook ──► [n8n] (via HTTPS Tunnel)
+                  └── HTTP Routes (/api/n8n/*)     ◄── HMAC-SHA256 Auth   ◄── [n8n] (Scheduled Overdue Reminders)
+```
 
 # Prerequisites
 
